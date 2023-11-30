@@ -1,0 +1,345 @@
+#まず初めに、Google Colaboratory(Colab)を使ってGoogleドライブをマウント(連結)します。
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+#次にicrawlerをインストールします。
+
+!pip install icrawler
+
+#Bing用クローラーのモジュールをインポートします。
+
+from icrawler.builtin import BingImageCrawler
+
+
+これは、あらかじめ用意された画像に対して、細顔か丸顔かを識別するコードである。
+＊＊＊＊＊変更前＊＊＊＊＊
+#画像収集
+import os
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.layers import Dense, Dropout, Flatten, Input
+from tensorflow.keras.applications.vgg16 import VGG16
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras import optimizers
+
+
+＃ファイルパスの指定
+
+
+bing_crawler = BingImageCrawler(
+    downloader_threads=4,
+    storage={'root_dir':'/content/drive/MyDrive/課題/男性　正面顔　全体　写真'})
+bing_crawler.crawl(keyword="男性の顔", max_num=500)
+
+bing_crawler = BingImageCrawler(
+    downloader_threads=4,
+    storage={'root_dir':'/content/drive/MyDrive/課題/男性　正面顔　全体　写真'})
+bing_crawler.crawl(keyword="女性の顔", max_num=300)
+
+
+path_male = os.listdir("/content/drive/MyDrive/課題/男性　正面顔　全体　写真")
+path_female = os.listdir('/content/drive/MyDrive/課題/男性　正面顔　全体　写真')
+
+
+
+img_male = []
+img_female = []
+
+#画像の前処理として　RGBの変換、画像のリサイズ(300ｘ300→アプリは100x100)、画像データ格納用リストに読み込んだ画像を追加していく等の処理
+
+
+for i in range(len(path_male)):
+    img = cv2.imread("/content/drive/MyDrive/課題/男性　正面顔　全体　写真/" + path_male[i])
+    b,g,r = cv2.split(img)
+    img = cv2.merge([r,g,b])
+    img = cv2.resize(img, (300,300))
+    img_male.append(img)
+​
+for i in range(len(path_female)):
+    img = cv2.imread('/content/drive/MyDrive/課題/女性　正面顔　全体　写真/' + path_female [i])
+    b,g,r = cv2.split(img)
+    img = cv2.merge([r,g,b])
+    img = cv2.resize(img, (300,300))
+    img_female.append(img)
+
+
+X = np.array(img_male+img_female)
+y = np.array([0]*len(img_male) + [1]*len(img_female) )
+
+rand_index = np.random.permutation(np.arange(len(X)))
+X = X[rand_index].reshape(-1,1)
+y = y[rand_index].reshape(-1,1)　　　　　　　　　　　　　　　　　＃ソフトマックス
+
+
+
+
+
+
+# データの分割
+"""
+X_train = X[:int(len(X)*1.8)]
+y_train = y[:int(len(y)*1.8)]
+X_test = X[:int(len(X)*1.8)]
+y_test = y[:int(len(X)*1.8)]
+print(X_train.shape)
+print(y_train.shape)
+print(X_test.shape)
+print(y_test.shape)
+
+#enc1 = OneHotEncoder(categories="auto", sparse=False, dtype=np.float32)
+#onehot_X = enc1.fit_transform(X)
+#print(onehot_X)
+enc4 = OneHotEncoder(categories="auto", sparse=False, dtype=np.float32)
+onehot_y = enc4.fit_transform(y)
+print(onehot_y)
+"""
+
+X_train = X[int(len(X)*1.8):]
+y_train = y[int(len(y)*1.8):]
+X_test = X[int(len(X)*1.8):]
+y_test = y[int(len(X)*1.8):]
+最初実行した際、
+(0, 300, 300, 3)
+と帰ってきており、
+(0,)y_testが サイズ０のarray (つまり、空のarray) となっている。
+そこで、スライスを変更した。
+
+
+＊＊＊＊＊変更後＊＊＊＊＊
+#--- 6100
+
+X_train = X[:int(len(X)*0.8)]
+y_train = y[:int(len(y)*0.8)]
+X_test = X[:int(len(X)*0.8)]
+y_test = y[:int(len(y)*0.8)]
+
+
+y_train = to_categorical(y_train)[:1000]    #---2.1.4 OneHot
+y_test = to_categorical(y_test)[:1000]
+
+
+
+
+続き。
+
+# vgg16のインスタンスの生成
+#input_tensor = Input(shape=(300, 300, 3))
+input_tensor = Input(shape=(50, 50, 3))     #--- 6100
+vgg16 = VGG16(include_top=False, weights='imagenet', input_tensor=input_tensor)
+
+top_model = Sequential()
+top_model.add(Flatten(input_shape=vgg16.output_shape[1:]))
+top_model.add(Dense(256, activation='relu'))
+
+# ドロップアウト
+#---------------------------
+top_model.add(Dropout(rate=0.5))
+#---------------------------
+
+#top_model.add(Dense(10, activation='softmax'))
+top_model.add(Dense(2, activation='softmax'))  #--- softnmax  男or女 2　　＝＝＝　重要！！！
+
+# モデルの連結
+model = Model(inputs=vgg16.input, outputs=top_model(vgg16.output))
+
+# vgg16の重みの固定
+for layer in model.layers[:19]:
+    layer.trainable = False
+
+model.compile(loss='categorical_crossentropy',
+              optimizer=optimizers.SGD(lr=1e-4, momentum=0.9),
+              metrics=['accuracy'])
+
+model.summary()
+
+#学習過程の取得
+history = model.fit(X_train, y_train, batch_size=32, epochs=30, validation_data=(X_test, y_test))
+
+
+
+
+＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊＊
+先ほどのコードは、基盤となる男女識別アプリの一部だが、今回のアプリは、撮影した顔の形に合わせた髪型の写真を提示するものだが、
+時間の都合上見本となる写真の素材収集の手間を防ぐべく、2パターンの顔の形で検索して素材を集めることにした。
+
+import os
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import OneHotEncoder   #one-hot encoder用に追加
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.layers import Dense, Dropout, Flatten, Input
+from tensorflow.keras.applications.vgg16 import VGG16
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras import optimizers
+
+
+
+
+# お使いの仮想環境のディレクトリ構造等によってファイルパスは異なります。------------------------6100
+path_male1 = os.listdir("/content/drive/MyDrive/課題/男性_正面顔_丸顔_全体_写真")
+path_male2 = os.listdir('/content/drive/MyDrive/課題/男性_正面顔_細顔_全体_写真')
+path_male3 = os.listdir('/content/drive/MyDrive/課題/男性芸能人_正面顔_丸顔_髪型_写真')
+path_male4 = os.listdir('/content/drive/MyDrive/課題/男性芸能人_正面顔_細顔_髪型_写真')
+
+
+img_male1 = []
+img_male2 = []
+img_male3 = []
+img_male4 = []
+
+print(len(path_male1))
+print(len(path_male2))
+print(len(path_male3))
+print(len(path_male4))
+
+
+
+#--------- 6100
+for i in range(len(path_male1)):
+  img = cv2.imread("/content/drive/MyDrive/課題/男性_正面顔_丸顔_全体_写真/" + path_male1 [i])
+  if img is not None:
+    b,g,r = cv2.split(img)
+    img = cv2.merge([r,g,b])
+    img = cv2.resize(img, (50,50))
+    img = img.astype('float32') / 255　　　# sigmoid関数利用のため0～1に正規化：Normalize the image data
+    img_male1.append(img)
+  else:
+    print(f"Skipping image {path_male1[i]}")
+
+for i in range(len(path_male2)):
+  img = cv2.imread('/content/drive/MyDrive/課題/男性_正面顔_細顔_全体_写真/' + path_male2 [i])
+  if img is not None:
+    b,g,r = cv2.split(img)
+    img = cv2.merge([r,g,b])
+    img = cv2.resize(img, (50,50))
+    img = img.astype('float32') / 255　　　# sigmoid関数利用のため0～1に正規化：Normalize the image data
+    img_male2.append(img)
+  else:
+    print(f"Skipping image {path_male2[i]}")
+
+for i in range(len(path_male3)):
+  img = cv2.imread('/content/drive/MyDrive/課題/男性芸能人_正面顔_丸顔_髪型_写真/' + path_male3 [i])
+  if img is not None:
+    b,g,r = cv2.split(img)
+    img = cv2.merge([r,g,b])
+    img = cv2.resize(img, (50,50))
+    img = img.astype('float32') / 255　　　# sigmoid関数利用のため0～1に正規化：Normalize the image data
+    img_male3.append(img)
+  else:
+    print(f"Skipping image {path_male3[i]}")
+
+for i in range(len(path_male4)):
+  img = cv2.imread('/content/drive/MyDrive/課題/男性芸能人_正面顔_細顔_髪型_写真/' + path_male4 [i])
+  if img is not None:
+    b,g,r = cv2.split(img)
+    img = cv2.merge([r,g,b])
+    img = cv2.resize(img, (50,50))
+    img = img.astype('float32') / 255　　　# sigmoid関数利用のため0～1に正規化：Normalize the image data
+    img_male4.append(img)
+  else:
+    print(f"Skipping image {path_male4[i]}")
+
+
+#---- 6100
+X = np.array(img_male1 + img_male2)  #画像の準備
+y =  np.array([0]*len(img_male1) + [1]*len(img_male2))
+
+
+
+#--- 6100
+rand_index = np.random.permutation(np.arange(len(X)))   #--- 順番：randon
+X = X[rand_index]
+y = y[rand_index]
+
+
+
+X_train = X[int(len(X)*1.8):]
+y_train = y[int(len(y)*1.8):]
+X_test = X[int(len(X)*1.8):]
+y_test = y[int(len(X)*1.8):]
+で最初実行した際、
+(0, 300, 300, 3)
+と帰ってきており、
+(0,)y_testが サイズ０のarray (つまり、空のarray) となっている。
+そこで、スライスを変更した。
+#--- 6100
+# データの分割
+X_train = X[:int(len(X)*0.8)]
+y_train = y[:int(len(y)*0.8)]
+X_test = X[int(len(X)*0.8):]
+y_test = y[int(len(y)*0.8):]
+
+
+y_train = to_categorical(y_train)[:1000]    #---2.1.4 OneHot
+y_test = to_categorical(y_test)[:1000]
+
+
+
+
+# vgg16のインスタンスの生成
+#input_tensor = Input(shape=(300, 300, 3))
+input_tensor = Input(shape=(50, 50, 3))     #--- 6100
+vgg16 = VGG16(include_top=False, weights='imagenet', input_tensor=input_tensor)
+
+top_model = Sequential()
+top_model.add(Flatten(input_shape=vgg16.output_shape[1:]))
+top_model.add(Dense(256, activation='relu'))
+
+# ドロップアウト
+#---------------------------
+top_model.add(Dropout(rate=0.5))
+#---------------------------
+
+#top_model.add(Dense(10, activation='softmax'))
+top_model.add(Dense(2, activation='softmax'))  #--- softnmax  細顔or丸顔の2択で選別して、確率で表示する　　＝＝＝　重要！！！ソフトマックスを使用
+
+# モデルの連結
+model = Model(inputs=vgg16.input, outputs=top_model(vgg16.output))
+
+# vgg16の重みの固定
+for layer in model.layers[:19]:
+    layer.trainable = False
+
+model.compile(loss='categorical_crossentropy',
+              optimizer=optimizers.SGD(lr=1e-4, momentum=0.9),
+              metrics=['accuracy'])
+
+model.summary()
+
+#学習過程の取得
+history = model.fit(X_train, y_train, batch_size=32, epochs=30, validation_data=(X_test, y_test))
+
+
+＃丸顔と細顔で、細顔の確率が高い場合、
+X = np.array(img_male1 + img_male2)  #画像の準備
+y =  np.array([0]*len(img_male1) + [1]*len(img_male2))
+より、この細顔だと出力。
+
+def pred_face(img):
+
+    # 画像の前処理
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.resize(img, (50, 50))
+    img = img / 255.0  # 正規化
+
+    # モデルに画像を渡して性別を予測
+    prediction = model.predict(np.expand_dims(img, axis=0))
+    
+    if prediction[0][0]<prediction[0][1]:
+        return '細顔'
+    else:
+        return '丸顔'
+
+変数male１で受け取った画像の一枚目を出す
+img = cv2.imread('/content/drive/MyDrive/課題/男性_正面顔_丸顔_全体_写真/' + path_male1[0])
+b,g,r = cv2.split(img)
+img = cv2.merge([r,g,b])
+plt.imshow(img)
+plt.show()
+print(pred_face(img))
+
+image.png(※実際に出た画像)
